@@ -89,22 +89,33 @@ func (t *Trie) HasKeysWithPrefix(key string) bool {
 
 // Removes a key from the trie, ensuring that
 // all bitmasks up to root are appropriately recalculated.
-func (t *Trie) Remove(key string) {
+func (t *Trie) Remove(key string) bool {
 	var (
 		i    int
 		rs   = []rune(key)
 		node = findNode(t.Root(), []rune(key))
 	)
 
+	if node == nil {
+		return false
+	}
+
 	t.size--
 	for n := node.Parent(); n != nil; n = n.Parent() {
 		i++
+
+		if n == t.root {
+			t.root = &Node{children: make(map[rune]*Node)}
+		}
+
 		if len(n.Children()) > 1 {
 			r := rs[len(rs)-i]
 			n.RemoveChild(r)
 			break
 		}
 	}
+
+	return true
 }
 
 // Returns all the keys currently stored in the trie.
@@ -119,6 +130,11 @@ func (t Trie) FuzzySearch(pre string) []string {
 	return keys
 }
 
+// Performs a fuzzy search against the keys and meta in the trie.
+func (t Trie) FuzzySearchWithMeta(pre string) ([]string, []interface{}) {
+	return fuzzycollectWithMeta(t.Root(), []rune(pre))
+}
+
 // Performs a prefix search against the keys in the trie.
 func (t Trie) PrefixSearch(pre string) []string {
 	node := findNode(t.Root(), []rune(pre))
@@ -127,6 +143,16 @@ func (t Trie) PrefixSearch(pre string) []string {
 	}
 
 	return collect(node)
+}
+
+// Performs a prefix search against the keys and meta in the trie.
+func (t Trie) PrefixSearchWithMeta(pre string) ([]string, []interface{}) {
+	node := findNode(t.Root(), []rune(pre))
+	if node == nil {
+		return nil, nil
+	}
+
+	return collectWithMeta(node)
 }
 
 // Creates and returns a pointer to a new child for the node.
@@ -246,6 +272,33 @@ func collect(node *Node) []string {
 	return keys
 }
 
+func collectWithMeta(node *Node) ([]string, []interface{}) {
+	var (
+		keys []string
+		n    *Node
+		i    int
+		vals []interface{}
+	)
+	nodes := []*Node{node}
+	for l := len(nodes); l != 0; l = len(nodes) {
+		i = l - 1
+		n = nodes[i]
+		nodes = nodes[:i]
+		for _, c := range n.children {
+			nodes = append(nodes, c)
+		}
+		if n.term {
+			word := ""
+			for p := n.parent; p.depth != 0; p = p.parent {
+				word = string(p.val) + word
+			}
+			keys = append(keys, word)
+			vals = append(vals, n.meta)
+		}
+	}
+	return keys, vals
+}
+
 type potentialSubtree struct {
 	idx  int
 	node *Node
@@ -282,4 +335,40 @@ func fuzzycollect(node *Node, partial []rune) []string {
 		}
 	}
 	return keys
+}
+
+func fuzzycollectWithMeta(node *Node, partial []rune) ([]string, []interface{}) {
+	var (
+		m    uint64
+		i    int
+		p    potentialSubtree
+		keys []string
+		vals []interface{}
+	)
+
+	potential := []potentialSubtree{potentialSubtree{node: node, idx: 0}}
+	for l := len(potential); l > 0; l = len(potential) {
+		i = l - 1
+		p = potential[i]
+		potential = potential[:i]
+		m = maskruneslice(partial[p.idx:])
+		if (p.node.mask & m) != m {
+			continue
+		}
+
+		if p.node.val == partial[p.idx] {
+			p.idx++
+			if p.idx == len(partial) {
+				ks, vs := collectWithMeta(p.node)
+				keys = append(keys, ks...)
+				vals = append(vals, vs...)
+				continue
+			}
+		}
+
+		for _, c := range p.node.children {
+			potential = append(potential, potentialSubtree{node: c, idx: p.idx})
+		}
+	}
+	return keys, vals
 }
